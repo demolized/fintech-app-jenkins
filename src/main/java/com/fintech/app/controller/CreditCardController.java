@@ -34,7 +34,9 @@ public class CreditCardController {
     // Save new card (POST /cards)
     @PostMapping
     public String addCard(@ModelAttribute CreditCard card) {
-        cardRepo.save(card);
+        if (card != null) {
+            cardRepo.save(card);
+        }
         return "redirect:/cards";
     }
 }

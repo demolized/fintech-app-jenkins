@@ -1,6 +1,6 @@
-Fintech App – CI/CD Pipeline (Jenkins + SonarQube + ECR + EKS)
+# Fintech App – CI/CD Pipeline (Jenkins + SonarQube + ECR + EKS)
 
-This repository contains the full CI/CD automation pipeline for the Fintech App, powered by:
+This repository contains the full CI/CD automation pipeline for the Fintech App, a Spring Boot application for tracking credit card expenses.
 
 Jenkins (SSH Build Node)
 

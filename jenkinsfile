@@ -154,52 +154,46 @@ pipeline {
         sh """
           set -euo pipefail
 
+          # Use environment-specific cluster name if needed, or a default pattern
           CLUSTER_NAME="${params.ENVIRONMENT}-dominion-cluster"
-          aws eks update-kubeconfig --region ${params.REGION} --name "$CLUSTER_NAME"
+          echo "Updating kubeconfig for cluster: \$CLUSTER_NAME"
+          aws eks update-kubeconfig --region ${params.REGION} --name "\$CLUSTER_NAME"
 
           kubectl get nodes
 
           # Optional addons
-          [ -x eks_addons/script/helm_install.sh ] && eks_addons/script/helm_install.sh || true
-          [ -x eks_addons/script/helm_charts.sh ]  && eks_addons/script/helm_charts.sh  || true
+          if [ -x eks_addons/script/helm_install.sh ]; then ./eks_addons/script/helm_install.sh; fi
+          if [ -x eks_addons/script/helm_charts.sh ]; then ./eks_addons/script/helm_charts.sh; fi
 
           # Monitoring/logging
-          [ -d ./eks_addons/monitoring ] && kubectl apply -k ./eks_addons/monitoring || true
-          [ -d ./eks_addons/elk ]        && kubectl apply -k ./eks_addons/elk        || true
+          if [ -d ./eks_addons/monitoring ]; then kubectl apply -k ./eks_addons/monitoring; fi
+          if [ -d ./eks_addons/elk ]; then kubectl apply -k ./eks_addons/elk; fi
 
           ENV="${params.ENVIRONMENT}"
           IMAGE_URI="${env.IMAGE_URI}"
 
-          FILE=""
-          for p in "./k8s/overlays/$ENV/patch-deployment.yaml" \\
-                   "./fintech-app/k8s/overlays/$ENV/patch-deployment.yaml" \\
-                   "/fintech-app/k8s/overlays/$ENV/patch-deployment.yaml"; do
-            if [ -f "$p" ]; then FILE="$p"; break; fi
-          done
-
-          if [ -z "$FILE" ]; then
-            echo "ERROR: patch-deployment.yaml not found for ENV=$ENV" >&2
+          # Robustly find the patch file
+          PATCH_FILE="k8s/overlays/\$ENV/patch-deployment.yaml"
+          if [ ! -f "\$PATCH_FILE" ]; then
+            echo "ERROR: \$PATCH_FILE not found" >&2
             exit 1
           fi
 
-          echo "Patching $FILE with image: $IMAGE_URI"
-          perl -0777 -pe "s|image:\\s*[\\w\\.\\-]+\\.dkr\\.ecr\\.[\\w-]+\\.amazonaws\\.com/[\\w\\.\\-]+:[\\w\\.\\-]+|image: $IMAGE_URI|g" -i "$FILE"
+          echo "Patching \$PATCH_FILE with image: \$IMAGE_URI"
+          # Use a more reliable regex for patching the image
+          sed -i "s|image:.*|image: \$IMAGE_URI|g" "\$PATCH_FILE"
 
-          echo "Updated image line:"
-          grep -nE 'image:\\s' "$FILE" | head -1
+          echo "Updated image line in \$PATCH_FILE:"
+          grep "image:" "\$PATCH_FILE"
 
-          OVERLAY_DIR=""
-          for d in "./k8s/overlays/$ENV" "./fintech-app/k8s/overlays/$ENV" "/fintech-app/k8s/overlays/$ENV"; do
-            if [ -d "$d" ]; then OVERLAY_DIR="$d"; break; fi
-          done
-
-          if [ -z "$OVERLAY_DIR" ]; then
-            echo "ERROR: Overlay directory for ENV=$ENV not found" >&2
+          OVERLAY_DIR="k8s/overlays/\$ENV"
+          if [ ! -d "\$OVERLAY_DIR" ]; then
+            echo "ERROR: Overlay directory \$OVERLAY_DIR not found" >&2
             exit 1
           fi
 
-          echo "Applying overlay: $OVERLAY_DIR"
-          kubectl apply -k "$OVERLAY_DIR"
+          echo "Applying overlay: \$OVERLAY_DIR"
+          kubectl apply -k "\$OVERLAY_DIR"
         """
       }
     }

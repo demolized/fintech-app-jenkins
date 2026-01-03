@@ -38,6 +38,9 @@ public class ExpenseService {
     }
 
     public Expense save(Expense expense) {
-        return repo.save(expense);
+        if (expense != null) {
+            return repo.save(expense);
+        }
+        return null;
     }
 }

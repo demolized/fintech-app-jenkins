@@ -9,232 +9,128 @@ DOMAIN_NAME="dominionsystem.org"
 APP_PORT=8080
 
 # === GO TO PROJECT ROOT ===
-cd "$(dirname "$0")/.." || exit
+cd "$(dirname "$0")" || exit
 
 # === ENSURE DIRECTORIES EXIST ===
-echo "📁 Creating folders..."
-mkdir -p .github/workflows
-mkdir -p k8s
-mkdir -p scripts
+echo "📁 Checking folders..."
+for dir in k8s/base k8s/overlays/dev k8s/overlays/qa k8s/overlays/uat k8s/overlays/prod eks_addons/script; do
+  if [ ! -d "$dir" ]; then
+    echo "Creating $dir..."
+    mkdir -p "$dir"
+  fi
+done
 
-echo "🚀 Generating Dockerfile..."
-cat <<EOF > Dockerfile
+echo "🚀 Checking Dockerfile..."
+if [ ! -f Dockerfile ]; then
+  cat <<EOF > Dockerfile
+# -------- STAGE 1: Build the application --------
+FROM maven:3.9.4-eclipse-temurin-17-alpine AS build
+WORKDIR /build
+COPY pom.xml .
+COPY src ./src
+RUN mvn clean package -DskipTests
+
+# -------- STAGE 2: Create minimal runtime image --------
 FROM eclipse-temurin:17-jdk-alpine
 WORKDIR /app
-COPY target/*.jar app.jar
+COPY --from=build /build/target/*.jar app.jar
 ENTRYPOINT ["java", "-jar", "app.jar"]
 EOF
+  echo "Dockerfile created."
+else
+  echo "Dockerfile already exists, skipping."
+fi
 
-echo "🧪 Creating GitHub Actions CI/CD workflow..."
-cat <<EOF > .github/workflows/ci-cd.yml
-name: CI-CD Pipeline
+echo "🌐 Checking Kubernetes manifests..."
 
-on:
-  push:
-    branches: [ main ]
-
-env:
-  AWS_REGION: $AWS_REGION
-  ECR_REGISTRY: $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
-  ECR_REPO: $ECR_REPO_NAME
-
-jobs:
-  build:
-    name: Build & Test
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Source
-        uses: actions/checkout@v3
-
-      - name: Set up JDK
-        uses: actions/setup-java@v3
-        with:
-          java-version: '17'
-          distribution: 'temurin'
-
-      - name: Build with Maven
-        run: mvn clean package -DskipTests
-
-      - name: SonarQube Scan
-        uses: sonarsource/sonarqube-scan-action@master
-        env:
-          SONAR_TOKEN: \${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: \${{ secrets.SONAR_HOST_URL }}
-
-      - name: Login to Amazon ECR
-        uses: aws-actions/amazon-ecr-login@v1
-
-      - name: Build and Push Docker image
-        run: |
-          IMAGE_TAG=\${{ github.sha }}
-          docker build -t \$ECR_REGISTRY/\$ECR_REPO:\$IMAGE_TAG .
-          docker push \$ECR_REGISTRY/\$ECR_REPO:\$IMAGE_TAG
-
-  deploy:
-    name: Deploy to EKS
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Configure kubectl
-        uses: aws-actions/eks-setup-kubectl@v1
-        with:
-          cluster-name: dominion-cluster
-          region: $AWS_REGION
-
-      - name: Apply Kubernetes Resources
-        run: |
-          kubectl apply -n $EKS_NAMESPACE -f k8s/
-EOF
-
-echo "🌐 Creating Kubernetes manifests..."
-
-# Web Deployment
-cat <<EOF > k8s/web-deployment.yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: web
-  namespace: $EKS_NAMESPACE
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: web
-  template:
-    metadata:
-      labels:
-        app: web
-    spec:
-      containers:
-        - name: web
-          image: nginx
-          ports:
-            - containerPort: 80
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: web
-  namespace: $EKS_NAMESPACE
-spec:
-  selector:
-    app: web
-  ports:
-    - port: 80
-      targetPort: 80
-  type: ClusterIP
-EOF
-
-# App Deployment
-cat <<EOF > k8s/app-deployment.yaml
+# Base Deployment
+if [ ! -f k8s/base/deployment.yaml ]; then
+  cat <<EOF > k8s/base/deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: app
   namespace: $EKS_NAMESPACE
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: fintech-app
+  template:
+    metadata:
+      labels:
+        app: fintech-app
+    spec:
+      containers:
+      - name: fintech-app
+        image: $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_NAME:latest
+        ports:
+        - containerPort: $APP_PORT
+        env:
+        - name: SPRING_DATASOURCE_URL
+          value: jdbc:mysql://mysql-service.$EKS_NAMESPACE.svc.cluster.local:3306/fintech
+        - name: SPRING_DATASOURCE_USERNAME
+          value: root
+        - name: SPRING_DATASOURCE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mysql-secret
+              key: root-password
+        readinessProbe:
+          httpGet:
+            path: /actuator/health
+            port: $APP_PORT
+          initialDelaySeconds: 60
+        livenessProbe:
+          httpGet:
+            path: /actuator/health
+            port: $APP_PORT
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "512Mi"
+          limits:
+            cpu: "1"
+            memory: "1Gi"
+EOF
+  echo "k8s/base/deployment.yaml created."
+fi
+
+# Dev Overlay
+if [ ! -f k8s/overlays/dev/patch-deployment.yaml ]; then
+  cat <<EOF > k8s/overlays/dev/patch-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app
 spec:
   replicas: 2
-  selector:
-    matchLabels:
-      app: app
   template:
-    metadata:
-      labels:
-        app: app
     spec:
       containers:
-        - name: fintech-app
-          image: $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_NAME:latest
-          ports:
-            - containerPort: $APP_PORT
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: app
-  namespace: $EKS_NAMESPACE
-spec:
-  selector:
-    app: app
-  ports:
-    - port: $APP_PORT
-      targetPort: $APP_PORT
-  type: ClusterIP
+      - name: fintech-app
+        image: $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_NAME:IMAGE_TAG
 EOF
+  echo "k8s/overlays/dev/patch-deployment.yaml created."
+fi
 
-# DB Deployment
-cat <<EOF > k8s/db-deployment.yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: db
-  namespace: $EKS_NAMESPACE
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: db
-  template:
-    metadata:
-      labels:
-        app: db
-    spec:
-      containers:
-        - name: mysql
-          image: mysql:8
-          env:
-            - name: MYSQL_ROOT_PASSWORD
-              value: rootpass
-            - name: MYSQL_DATABASE
-              value: fintech
-          ports:
-            - containerPort: 3306
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: db
-  namespace: $EKS_NAMESPACE
-spec:
-  selector:
-    app: db
-  ports:
-    - port: 3306
-      targetPort: 3306
-  type: ClusterIP
+if [ ! -f k8s/overlays/dev/kustomization.yaml ]; then
+  cat <<EOF > k8s/overlays/dev/kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- ../../base
+patchesStrategicMerge:
+- patch-deployment.yaml
+namePrefix: dev-
 EOF
+  echo "k8s/overlays/dev/kustomization.yaml created."
+fi
 
-# ALB Ingress
-cat <<EOF > k8s/alb-ingress.yaml
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: alb-ingress
-  namespace: $EKS_NAMESPACE
-  annotations:
-    alb.ingress.kubernetes.io/scheme: internet-facing
-    alb.ingress.kubernetes.io/target-type: ip
-    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
-    external-dns.alpha.kubernetes.io/hostname: $DOMAIN_NAME
-spec:
-  ingressClassName: alb
-  rules:
-    - host: $DOMAIN_NAME
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: app
-                port:
-                  number: $APP_PORT
-EOF
-
-echo "✅ All project files successfully generated!"
+echo "✅ Project setup check completed!"
 echo ""
 echo "🔑 Next Steps:"
-echo "1. Commit and push everything to your GitHub repo"
-echo "2. Add GitHub secrets: SONAR_TOKEN, SONAR_HOST_URL, AWS credentials"
-echo "3. Ensure EKS and ALB Ingress Controller are ready"
-echo "4. Deploy your app using 'kubectl apply -f k8s/' 🚀"
+echo "1. Review the generated/existing files in k8s/ and Dockerfile"
+echo "2. Ensure your Jenkins pipeline is configured with the correct credentials"
+echo "3. Push your changes to the repository to trigger the pipeline 🚀"
+

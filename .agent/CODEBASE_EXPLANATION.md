@@ -295,9 +295,9 @@ The pipeline runs on a **remote SSH build node** with the label `maven-sonarqube
     └─ Wait for user to approve deployment
 
 11. Deploy to EKS
-    └─ Update kubeconfig
-    └─ Patch deployment YAML with new image tag
-    └─ kubectl apply -k ./k8s/overlays/<env>
+    └─ Update kubeconfig for the selected environment
+    └─ Robustly patch deployment YAML with new image tag using sed
+    └─ Apply Kustomize overlay for the selected environment
 ```
 
 ### Key Features:
@@ -305,6 +305,7 @@ The pipeline runs on a **remote SSH build node** with the label `maven-sonarqube
 - ✅ **Automatic account detection**
 - ✅ **Environment-based deployment** (dev/qa/uat/prod)
 - ✅ **Manual approval gate** for production safety
+- ✅ **Robust image patching** logic for reliability
 - ✅ **Automatic Docker cleanup** after build
 
 ---

@@ -51,7 +51,10 @@ public class ExpenseController {
     @PostMapping("/expenses")
     public String addExpense(@ModelAttribute Expense expense) {
         if (expense.getCard() != null && expense.getCard().getId() != null) {
-            cardRepo.findById(expense.getCard().getId()).ifPresent(expense::setCard);
+            Long cardId = expense.getCard().getId();
+            if (cardId != null) {
+                cardRepo.findById(cardId).ifPresent(expense::setCard);
+            }
         }
         expenseService.save(expense);
         return "redirect:/expenses";
